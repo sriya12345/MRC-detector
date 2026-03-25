@@ -1,0 +1,11 @@
+# Python
+venv/
+__pycache__/
+
+# MATLAB
+*.asv
+
+# Outputs
+Plots/
+*.png
+*.fig
