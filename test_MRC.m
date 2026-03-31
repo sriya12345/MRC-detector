@@ -1,19 +1,19 @@
 close all; clc; clear;
 
 %% Step 1: OTFS Parameters
-M = 4;                      
+M = 32;                      
 N = 64;                     
 Q = 4;                      
 bits_per_sym = log2(Q);
-l = [0, 1, 2, 3];           
-k = [0, 1, 2, 3];           
-P = length(l);              
+P = 4;
+l = randi([0 M-1], 1, P);
+k = randi([0 N-1], 1, P);                         
 L_zp = max(l);              
 M_prime = M + L_zp;         
 
 %% Simulation Parameters
 SNR_dB_range = 0:2:30;      % SNR range for the plot
-max_frames = 1000;           % Number of frames to average per SNR point
+max_frames = 100;           % Number of frames to average per SNR point
 max_iter = 10;               % MRC iterations
 
 BER_results = zeros(length(SNR_dB_range), 1);
@@ -32,25 +32,29 @@ for snr_idx = 1:length(SNR_dB_range)
         bits = randi([0 1], N * M * bits_per_sym, 1);
         symbols = qammod(bits, Q, 'InputType', 'bit', 'UnitAveragePower', true);
         X_tx_vec = zeros(N * M_prime, 1);
-        X_tx_vec(1:N*M) = symbols;
+        X_tx_vec(1:N*M) = symbols;                                                % ZP
+
+        l = randi([0 M-1], 1, P);
+        k = randi([0 N-1], 1, P);
 
         % 2. Channel Generation (Rayleigh)
         h = (randn(1, P) + 1j*randn(1, P)) / sqrt(2);
-        h = h / norm(h);
+        %h = h / norm(h);
 
-        % 3. Build K matrices and Pre-calculate Dm
-        K = cell(M_prime, P);
-        Dm = cell(M, 1);
+        % 3. Build K matrices
+        K = cell(M_prime, P);                                                      % N x N submatrix
         for m_idx = 1:M_prime
             for p = 1:P
-                nu_ml = zeros(N, 1);
+                nu_ml = zeros(N, 1);                                               % doppler response vector
                 nu_ml(mod(k(p), N) + 1) = h(p) * exp(1j * 2 * pi * k(p) * (m_idx - 1 - l(p)) / (M * N)); 
-                K{m_idx, p} = gallery('circul', nu_ml).'; 
+                K{m_idx, p} = gallery('circul', nu_ml).';                          % circulant for m>l
             end
         end
-        
+
+        % 4. Pre-calculate Dm
+        Dm = cell(M, 1);
         for m = 1:M
-            sum_K_sq = zeros(N, N);
+            sum_K_sq = zeros(N, N);                                                % Dm: N x N matrix
             for p = 1:P
                 target_m = m + l(p);
                 if target_m <= M_prime
@@ -60,22 +64,22 @@ for snr_idx = 1:length(SNR_dB_range)
             Dm{m} = sum_K_sq;
         end
 
-        % 4. Transmission
-        Y_vec = zeros(N * M_prime, 1);
+        % 5. Transmission
+        Y_vec = zeros(N * M_prime, 1);                                             % NM'x1 Rx signal vector
         for target_m = 1:M_prime
             for p = 1:P
                 source_m = target_m - l(p);
                 if source_m >= 1 && source_m <= M
-                    idx_x = (source_m-1)*N + (1:N);
-                    idx_y = (target_m-1)*N + (1:N);
-                    Y_vec(idx_y) = Y_vec(idx_y) + K{target_m, p} * X_tx_vec(idx_x);
+                    idx_x = (source_m-1)*N + (1:N);                                 % Doppler vector at delay = source_m
+                    idx_y = (target_m-1)*N + (1:N);                                 % Doppler vector at delay = target_m
+                    Y_vec(idx_y) = Y_vec(idx_y) + K{target_m, p} * X_tx_vec(idx_x); 
                 end
             end
         end
         noise = sqrt(sigma_w_2/2) * (randn(size(Y_vec)) + 1j*randn(size(Y_vec)));
         Y_vec = Y_vec + noise;
 
-        % 5. Iterative MRC Detection
+        % 6. Iterative MRC Detection
         X_hat_vec = zeros(N * M_prime, 1);
         for iter = 1:max_iter
             for m = 1:M 
@@ -104,7 +108,7 @@ for snr_idx = 1:length(SNR_dB_range)
             end
         end
 
-        % 6. Error Counting
+        % 7. Error Counting
         estimated_symbols = X_hat_vec(1:N*M);
         bits_hat = qamdemod(estimated_symbols, Q, 'UnitAveragePower', true, 'OutputType', 'bit');
         total_bit_errors = total_bit_errors + sum(bits ~= bits_hat);
