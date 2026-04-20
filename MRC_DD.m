@@ -1,19 +1,22 @@
 close all; clc; clear;
 
 %% Step 1: OTFS Parameters
-M = 32;                      
-N = 64;                     
-Q = 4;                      
+M = 32;                      % No. of sub carriers
+N = 64;                      % No. of time slots
+Q = 4; 
+
 bits_per_sym = log2(Q);
-P = 4;
-l = randi([0 M-1], 1, P);
-k = randi([0 N-1], 1, P);                         
+P = 4;                       % No. of paths
+l = [0,1,2,3];               % delay taps
+k = [0,1,2,3];               % doppler taps
+% l = randi([0 M-1], 1, P);
+% k = randi([0 N-1], 1, P);                         
 L_zp = max(l);              
 M_prime = M + L_zp;         
 
 %% Simulation Parameters
-SNR_dB_range = 0:2:30;      % SNR range for the plot
-max_frames = 100;           % Number of frames to average per SNR point
+SNR_dB_range = 0:5:25;      
+max_frames = 1000;           % No. of frames to average per SNR point
 max_iter = 10;               % MRC iterations
 
 BER_results = zeros(length(SNR_dB_range), 1);
@@ -31,17 +34,17 @@ for snr_idx = 1:length(SNR_dB_range)
         % 1. Generate Bits and Symbols
         bits = randi([0 1], N * M * bits_per_sym, 1);
         symbols = qammod(bits, Q, 'InputType', 'bit', 'UnitAveragePower', true);
-        X_tx_vec = zeros(N * M_prime, 1);
-        X_tx_vec(1:N*M) = symbols;                                                % ZP
+        X_tx_vec = zeros(N * M_prime, 1);                                         % ZP insertion
+        X_tx_vec(1:N*M) = symbols;                                                % DD domain Tx signal
 
-        l = randi([0 M-1], 1, P);
-        k = randi([0 N-1], 1, P);
+        % l = randi([0 M-1], 1, P);
+        % k = randi([0 N-1], 1, P);
 
         % 2. Channel Generation (Rayleigh)
         h = (randn(1, P) + 1j*randn(1, P)) / sqrt(2);
-        %h = h / norm(h);
+        h = h / norm(h);
 
-        % 3. Build K matrices
+        % 3. Build K submatrices 
         K = cell(M_prime, P);                                                      % N x N submatrix
         for m_idx = 1:M_prime
             for p = 1:P
@@ -69,7 +72,7 @@ for snr_idx = 1:length(SNR_dB_range)
         for target_m = 1:M_prime
             for p = 1:P
                 source_m = target_m - l(p);
-                if source_m >= 1 && source_m <= M
+                if source_m >= 1 && source_m <= M                                   % Not checking ZP region
                     idx_x = (source_m-1)*N + (1:N);                                 % Doppler vector at delay = source_m
                     idx_y = (target_m-1)*N + (1:N);                                 % Doppler vector at delay = target_m
                     Y_vec(idx_y) = Y_vec(idx_y) + K{target_m, p} * X_tx_vec(idx_x); 
@@ -83,32 +86,33 @@ for snr_idx = 1:length(SNR_dB_range)
         X_hat_vec = zeros(N * M_prime, 1);
         for iter = 1:max_iter
             for m = 1:M 
-                gm = zeros(N, 1);
+                gm = zeros(N, 1);                                   
                 for p = 1:P
-                    target_m = m + l(p);
+                    target_m = m + l(p);                                     % symbol appearance
                     if target_m > M_prime, continue; end
-                    idx_y = (target_m-1)*N + (1:N);
+                    idx_y = (target_m-1)*N + (1:N);                          % Rx doppler vector at that delay
                     
                     interference = zeros(N, 1);
-                    for p_prime = 1:P
+                    for p_prime = 1:P                                        % reconstructs contributions from other symbols 
                         source_m = target_m - l(p_prime);
-                        if (source_m == m && p_prime == p), continue; end
+                        if (source_m == m && p_prime == p), continue; end    % desired signal 
                         if source_m >= 1 && source_m <= M
                             idx_curr_x = (source_m-1)*N + (1:N);
                             interference = interference + K{target_m, p_prime} * X_hat_vec(idx_curr_x);
                         end
                     end
-                    blm = Y_vec(idx_y) - interference;
-                    gm = gm + K{target_m, p}' * blm;
+                    blm = Y_vec(idx_y) - interference;                       % channel impaired signal
+                    gm = gm + K{target_m, p}' * blm;                         % MRC step
                 end
-                cm = Dm{m} \ gm; 
+                cm = Dm{m} \ gm;                                             % soft estimate
                 idx_m = (m-1)*N + (1:N);
-                X_hat_vec(idx_m) = qammod(qamdemod(cm, Q, 'UnitAveragePower', true), ...
-                                         Q, 'UnitAveragePower', true);
+                % X_hat_vec(idx_m) = qammod(qamdemod(cm, Q, 'UnitAveragePower', true), ...
+                %                          Q, 'UnitAveragePower', true);
+                X_hat_vec(idx_m) = cm;
             end
         end
 
-        % 7. Error Counting
+        % 7. Demapping + BER calc
         estimated_symbols = X_hat_vec(1:N*M);
         bits_hat = qamdemod(estimated_symbols, Q, 'UnitAveragePower', true, 'OutputType', 'bit');
         total_bit_errors = total_bit_errors + sum(bits ~= bits_hat);
